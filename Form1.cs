@@ -9,38 +9,34 @@ using System.Threading.Tasks;
 using System.Windows.Forms;
 using System.Net;           //匯入網路通訊協定相關函數
 using System.Net.Sockets;   //匯入網路插座功能函數
-using System.Threading;//匯入多執行緒功能函數
+using System.Threading;     //匯入多執行緒功能函數
+using System.Collections;   //匯入集合物件功能
 
-namespace Go_Client
+namespace Go_Server
 {
     public partial class Form1 : Form
     {
-        //公用變數
         Socket T;           //通訊物件
-        string User;        //使用者
-        Thread Th;//網路監聽執行緒
-        int STEP_count = 0;
-        int show_step = 0;
+        TcpListener Server;//伺服端網路監聽器(相當於電話總機)
+        Socket Client;//給客戶用的連線物件(相當於電話分機)
+        Thread Th_Svr;//伺服器監聽用執行緒(電話總機開放中)
+        Thread Th_Clt;//客戶用的通話執行緒(電話分機連線中)
+        Hashtable HT = new Hashtable();//客戶名稱與通訊物件的集合(雜湊表)(key:Name, Socket)
+
+        Random rnd = new Random(Guid.NewGuid().GetHashCode()); //建立亂數抽牌
+        int check, re_chcek = 0;  //檢查牌組是否重複
+        int remain_card = 52; //剩餘手牌
+        int zero_count = 0;  //確認牌組中多少牌已被抽走
+        int game_point = 0;  //累積點數
+        int[] card_deck = new int[52]{1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,
+             30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,48,49,50,51,52};
         int[] card = new int[5];
-        int card_isclick = 0; //檢測第幾張牌被點擊
-        public Form1()
-        {
-            InitializeComponent();
-            textBox1.Text = ShowIP(); //呼叫函數找本機IP
-            this.textBox2.Text = "2013";
-            this.textBox3.Text = "enter your name";
-            button_start.Enabled = false;
-            button2.Enabled = false;
-            pictureBox1.Enabled = false;
-            pictureBox2.Enabled = false;
-            pictureBox3.Enabled = false;
-            pictureBox4.Enabled = false;
-            pictureBox5.Enabled = false;
-        }
+
         private void Form1_Load(object sender, EventArgs e)
         {
-            
+            textBox1.Text = ShowIP(); //呼叫函數找本機IP
         }
+
         //找本機IP
         private string ShowIP()
         {
@@ -56,416 +52,317 @@ namespace Go_Client
             return ""; //找不到合格IP回傳空字串
         }
 
-        private void Listen()
+        public Form1()
         {
-            EndPoint ServerEP = (EndPoint)T.RemoteEndPoint; //Server 的 EndPoint
-            byte[] B = new byte[1023]; //接收用的 Byte 陣列
-            int inLen = 0; //接收的位元組數目
-            int n = 0;
-            int Pic = 0;
-            string Msg; //接收到的完整訊息
-            string St; //命令碼
-            string Str; //訊息內容(不含命令碼)
+            InitializeComponent();
+            this.textBox2.Text = "2013";
+            this.textBox3.Text = "0";
             
-            while (true)//無限次監聽迴圈
-            {
-                try
-                {
-                    inLen = T.ReceiveFrom(B, ref ServerEP);//收聽資訊並取得位元組數
-                }
-                catch (Exception)//產生錯誤時
-                {
-                    T.Close();//關閉通訊器
-                    listBox1.Items.Clear();//清除線上名單
-                    MessageBox.Show("伺服器斷線了！");//顯示斷線
-                    button1.Enabled = true;//連線按鍵恢復可用
-                    Th.Abort();//刪除執行緒
-                }
-                Msg = Encoding.Default.GetString(B, 0, inLen); //解讀完整訊息
-                St = Msg.Substring(0, 1); //取出命令碼 (第一個字)
-                Str = Msg.Substring(1); //取出命令碼之後的訊息
-                switch (St)//依命令碼執行功能
-                {
-                    case "L"://接收線上名單
-                        listBox1.Items.Clear(); //清除名單
-                        string[] M = Str.Split(','); //拆解名單成陣列
-                        for (int i = 0; i < M.Length; i++)
-                        {
-                            listBox1.Items.Add(M[i]); //逐一加入名單
-                        }
-                        break;
-                    case "s"://傳送score訊息給所有人
-                        int GameOver = Int32.Parse(Str);
-                        textBox5.Text = Str;
-                        if (GameOver > 99) //如果點數超過99 顯示遊戲結束 玩家登出
-                        {
-                            DialogResult Result = MessageBox.Show("請按確定結束遊戲", "點數爆掉 遊戲結束", MessageBoxButtons.OK);
-                            if (Result == DialogResult.OK)
-                            {
-                                GameOver = 0;
-                                Send("9" + User);
-                                T.Close();
-                                textBox5.Text = ""+ 0; //歸0
-                                label_show_next.Text = "";
-                                show_step = 0;
-                                pictureBox1.Image = null;
-                                pictureBox2.Image = null;
-                                pictureBox3.Image = null;
-                                pictureBox4.Image = null;
-                                pictureBox5.Image = null;
-                                pictureBox6.Image = null;
-                                pictureBox1.Enabled = false;
-                                pictureBox2.Enabled = false;
-                                pictureBox3.Enabled = false;
-                                pictureBox4.Enabled = false;
-                                pictureBox5.Enabled = false;
-                                button_start.Enabled = false;
-                                button2.Enabled = false;
-                            }
-                        }
-                        break;
-                    case "c"://開局發牌 
-                        if (n == 0)
-                        {
-                            card[0] = Int32.Parse(Str.Substring(0, 2)); //接收第一張牌  起始位置0 長度2
-                            pictureBox1.Image = Image.FromFile(Application.StartupPath + "/poker_image/" + card[0] + ".jpg"); //顯示第一張牌
-                            n++;
-                            break;
-                        }
-                        if (n == 1)
-                        {
-                            card[1] = Int32.Parse(Str.Substring(0, 2)); //接收第二張牌  起始位置0 長度2
-                            pictureBox2.Image = Image.FromFile(Application.StartupPath+ "/poker_image/" + card[1] + ".jpg"); //顯示第二張牌
-                            n++;
-                        }
-                        if (n == 2)
-                        {
-                            card[2] = Int32.Parse(Str.Substring(3, 2)); //接收第三張牌  
-                            pictureBox3.Image = Image.FromFile(Application.StartupPath + "/poker_image/" + card[2] + ".jpg"); //顯示第三張牌                       
-                            n++;
-                        }
-                        if (n == 3)
-                        {
-                            card[3] = Int32.Parse(Str.Substring(6, 2)); //接收第四張牌
-                            pictureBox4.Image = Image.FromFile(Application.StartupPath + "/poker_image/" + card[3] + ".jpg"); //顯示第四張牌
-                            n++;
-                        }
-                        if (n == 4)
-                        {
-                            card[4] = Int32.Parse(Str.Substring(9, 2)); //接收第五張牌
-                            pictureBox5.Image = Image.FromFile(Application.StartupPath + "/poker_image/" + card[4] + ".jpg"); //顯示第五張牌
-                            n = 0;
-                        }
-                        pictureBox1.Enabled = true;
-                        pictureBox2.Enabled = true;
-                        pictureBox3.Enabled = true;
-                        pictureBox4.Enabled = true;
-                        pictureBox5.Enabled = true;
-                        break;
-                        
-                    case "H": //出牌後要求重抽一張新牌 
-                        STEP_count = 0;
-                        if (card_isclick == 1)
-                        {
-                            card[0] = Int32.Parse(Msg.Substring(1,2));
-                            pictureBox1.Image = Image.FromFile(Application.StartupPath + "/poker_image/" + card[0] + ".jpg"); //顯示第一張牌
-                        }
-                        if (card_isclick == 2)
-                        {
-                            card[1] = Int32.Parse(Msg.Substring(1, 2));
-                            pictureBox2.Image = Image.FromFile(Application.StartupPath + "/poker_image/" + card[1] + ".jpg"); //顯示第二張牌                         
-                        }
-                        if (card_isclick == 3)
-                        {
-                            card[2] = Int32.Parse(Msg.Substring(1, 2));
-                            pictureBox3.Image = Image.FromFile(Application.StartupPath + "/poker_image/" + card[2] + ".jpg"); //顯示第三張牌
-                        }
-                        if (card_isclick == 4)
-                        {
-                            card[3] = Int32.Parse(Msg.Substring(1, 2));
-                            pictureBox4.Image = Image.FromFile(Application.StartupPath + "/poker_image/" + card[3] + ".jpg"); //顯示第四張牌
-                        }
-                        if (card_isclick == 5)
-                        {
-                            card[4] = Int32.Parse(Msg.Substring(1, 2));
-                            pictureBox5.Image = Image.FromFile(Application.StartupPath + "/poker_image/" + card[4] + ".jpg"); //顯示第五張牌
-                        }
-                        Pic = Int32.Parse(Msg.Substring(4, 2)); //接收server廣播給所有client的牌
-                        pictureBox6.Image = Image.FromFile(Application.StartupPath + "/poker_image/" + Pic + ".jpg"); //顯示前一玩家打出的牌
-                        break;
-                    case "D": //client端接收server廣播其他client打出的牌
-                        Pic = Int32.Parse(Msg.Substring(1, 2)); //接收server廣播給所有client的牌
-                        pictureBox6.Image = Image.FromFile(Application.StartupPath + "/poker_image/" + Pic + ".jpg"); //顯示前一玩家打出的牌
-                        show_step++;
-                        STEP_count++;
-                        if (STEP_count == 3)  
-                        {
-                            
-                            pictureBox1.Enabled = true;
-                            pictureBox2.Enabled = true;
-                            pictureBox3.Enabled = true;
-                            pictureBox4.Enabled = true;
-                            pictureBox5.Enabled = true;
-                            if (show_step >= 3)
-                            {
-                                label_show_next.Text = "輪到你出牌囉";
-                            }
-                        }
-                        else
-                        {
-                            if (show_step >= 3)
-                            {
-                                label_show_next.Text = "請等待其他玩家出牌";
-                            }  
-                        }
-                        break;
-                }
-            }
         }
-        private void Send(string Str)
+        private void ServerSub()
         {
-            try
+            //Server IP 和 Port
+            IPEndPoint EP = new IPEndPoint(IPAddress.Parse(textBox1.Text), int.Parse(textBox2.Text));
+            Server = new TcpListener(EP);
+            Server.Start(100);
+            while (true)
             {
-                byte[] B = Encoding.Default.GetBytes(Str);     //翻譯字串Str為Byte陣列B
-                int ret = T.Send(B, 0, B.Length, SocketFlags.None);      //使用連線物件傳送資料
-            }
-            catch { }
-        }
-       
-
-        private void Button1_Click(object sender, EventArgs e)
-        {
-            CheckForIllegalCrossThreadCalls = false; //忽略跨執行緒處理的錯誤(允許跨執行緒存取變數)
-            string IP = textBox1.Text;                                  //伺服器IP
-            if(IP == "" )
-            {
-                MessageBox.Show("please enter Server IP");
-                return;
-            }
-            int Port = int.Parse(textBox2.Text);                        //伺服器Port
-            try
-            {
-                User = textBox3.Text;  //使用者名稱
-                IPEndPoint EP = new IPEndPoint(IPAddress.Parse(IP), Port);  //伺服器的連線端點資訊
-                //建立可以雙向通訊的TCP連線
-                T = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp);                                     
-                T.Connect(EP);           //連上伺服器的端點EP(類似撥號給電話總機)
-                Th = new Thread(Listen); //建立監聽執行緒
-                Th.IsBackground = true; //設定為背景執行緒
-                Th.Start(); //開始監聽
-                Send("0" + User);               //連線後隨即傳送自己的名稱給伺服器
-            }
-            catch (Exception)
-            {
-                MessageBox.Show("無法連上伺服器！"); //連線失敗時顯示訊息
-                return;
-            }
-            button1.Enabled = false; //讓連線按鍵失效，避免重複連線
-            button2.Enabled = true;  //允許玩家登出
-            button_start.Enabled = true;
-        }
-        private void Button2_Click(object sender, EventArgs e)
-        {
-            if (button1.Enabled == false)
-            {
-                Send("9" + User); //傳送自己的離線訊息給伺服器
-                T.Close();        //關閉網路通訊器T
-                textBox5.Text = "" + 0; //點數歸0
-                label_show_next.Text = "";
-                show_step = 0;
-                button1.Enabled = true;
-                button2.Enabled = false;
-                button_start.Enabled = false;
-                pictureBox1.Image = null;
-                pictureBox2.Image = null;
-                pictureBox3.Image = null;
-                pictureBox4.Image = null;
-                pictureBox5.Image = null;
-                pictureBox6.Image = null;
-                pictureBox1.Enabled = false;
-                pictureBox2.Enabled = false;
-                pictureBox3.Enabled = false;
-                pictureBox4.Enabled = false;
-                pictureBox5.Enabled = false;
+                Client = Server.AcceptSocket();
+                Th_Clt = new Thread(Listen); //建立監聽這個客戶連線的獨立執行緒
+                Th_Clt.IsBackground = true; //設定為背景執行緒
+                Th_Clt.Start(); //開始執行緒的運作
                 
             }
         }
-        private void Form1_Load_1(object sender, EventArgs e)
+        //#endregion
+        //#region 監聽客戶訊息的程式
+        private void Listen()
         {
+            Socket sck = Client;  //複製Client通訊物件到個別客戶專用物件Sck
+            Thread Th = Th_Clt;   //複製執行緒Th_Clt到區域變數Th
+            while (true) //持續監聽客戶傳來的訊息
+            {
+                
+                try //用 Sck 來接收此客戶訊息，inLen 是接收訊息的 Byte 數目
+                {
+                    byte[] B = new byte[1023];                            //建立接收資料用的陣列，長度須大於可能的訊息
+                    int inLen = sck.Receive(B);                           //接收網路資訊(Byte陣列)
+                    string Msg = Encoding.Default.GetString(B, 0, inLen); //翻譯實際訊息(長度inLen)
+                    string Cmd = Msg.Substring(0, 1);                     //取出命令碼 (第一個字)
+                    string Str = Msg.Substring(1);
+                    string ShowCard;
+                    int receive_card = 0; //負責接收手牌點數
+                    int change_card = 0;  //負責接收手牌位置 用以發新牌
+                    //取出命令碼之後的訊息(user name)
+                    switch (Cmd)//依據命令碼執行功能
+                    {
+                        case "0"://有新使用者上線：新增使用者到名單中
+                            HT.Add(Str, sck); //連線加入雜湊表，Key:使用者，Value:連線物件(Socket)
+                            listBox1.Items.Add(Str); //加入上線者名單
+                            SendAll(OnlineList()); //將目前上線人名單回傳剛剛登入的人(包含他自己)
+                            break;
+                        case "9": //使用者登出
+                            game_point = 0;
+                            textBox3.Text = "" + game_point; //點數歸0
+                            HT.Remove(Str);             //移除使用者名稱為Name的連線物件
+                            listBox1.Items.Remove(Str); //自上線者名單移除Name
+                            SendAll(OnlineList()); //將目前上線人名單回傳剛剛登入的人(不包含他自己)
+                            Th.Abort();                 //結束此客戶的監聽執行緒
+                            Reset_card_deck();
+                            break;
+                        case "R": //接收出牌訊息
+                            receive_card = Int32.Parse(Msg.Substring(1)); //接收client端傳送的手牌點數
+                            //MessageBox.Show("" + receive_card);
+                            Check_deck(); //檢查牌組
+                            Count_points(receive_card); //計算點數
+                            break;
+                        case "H": //接收牌型訊息 替client端換一張新牌
+                            change_card = Int32.Parse(Str.Substring(0,1)); //接收client手牌位置
+                            String player = Str.Substring(4);
+                            Check_deck();   //檢查牌組
+                            Change_card(change_card,player); //傳送新牌給玩家
+                            //接收client端打的牌的編號 然後廣播給所有client端
+                            ShowCard = Str.Substring(2,2);
+                            SendAll("D" + ShowCard);
+                            break;
+                        case "G": //開局發牌給玩家
+                            Check_deck();
+                            Shuffle(Str);
+                            break;
+                    }
+                    SendAll("s" + textBox3.Text); //廣播訊息
+
+                }
+                catch (Exception)
+                {
+                    //有錯誤時忽略，通常是客戶端無預警強制關閉程式，測試階段常發生
+                }
+                
+            }
+        }
+        private string OnlineList()
+        {
+            string L = "L"; //代表線上名單的命令碼(字頭)
+            for (int i = 0; i < listBox1.Items.Count; i++)
+            {
+                L += listBox1.Items[i]; //逐一將成員名單加入L字串
+                //不是最後一個成員要加上","區隔
+                if (i < listBox1.Items.Count - 1) { L += ","; }
+            }
+            return L;
+        }
+        private void SendAll(string Str)
+        {
+            byte[] B = Encoding.Default.GetBytes(Str); //訊息轉譯為Byte陣列
+            foreach (Socket s in HT.Values) s.Send(B, 0, B.Length, SocketFlags.None); //傳送資料
+        }
+        //#endregion
+
+        private void SendTo(string Str ,string User) //傳送訊息給指定使用者
+        {
+            byte[] B = Encoding.Default.GetBytes(Str); //訊息轉譯為Byte陣列
+            Socket Sck = (Socket)HT[User]; //取出發送對象User的通訊物件
+            Sck.Send(B, 0, B.Length, SocketFlags.None); //發送訊息
+        }
+
+        private void Form1_FormClosing(object sender, FormClosingEventArgs e)
+        {
+            Application.ExitThread();//關閉所有執行緒
+        }
+        private void Button1_Click_1(object sender, EventArgs e)
+        {
+            CheckForIllegalCrossThreadCalls = false;    //忽略跨執行緒處理的錯誤(允許跨執行緒存取變數)
+            Th_Svr = new Thread(ServerSub);             //宣告監聽執行緒(副程式ServerSub)
+            Th_Svr.IsBackground = true;                 //設定為背景執行緒
+            Th_Svr.Start();                             //啟動監聽執行緒
+            button1.Enabled = false;                    //讓按鍵無法使用(不能重複啟動伺服器)
+        }
+
+        private void Reset_card_deck()
+        {
+            card_deck = new int[52]{1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,
+            30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,48,49,50,51,52}; //牌組重設為52張
+            for (int i = 0; i < card.Length; i++) //將手上有的牌從牌組刪除
+            {
+                re_chcek = card[i];
+                card_deck[re_chcek - 1] = 0;
+            }
+            Check_deck(); //顯示剩餘牌組
+        }
+
+        //開局發牌
+        private void Shuffle(string player)
+        {
+            //int i = 0;
+            card = new int[5]; //5張手牌
+            //MessageBox.Show("" + card.Length);
+            for(int i=0;i<card.Length;i++)
+            {
+            RE:
+                card[i] = rnd.Next(1, 53); //亂數抽牌
+                //檢查是否抽到重覆 若重複就重抽
+                check = card[i];
+                if (card_deck[check - 1] == 0) 
+                {
+                    goto RE;
+                }
+                else
+                {
+                    card_deck[check - 1] = 0; //將該張牌從牌組中刪除(避免重複);
+                    if (card[i] < 10)
+                    {
+                        SendTo("c" + "0" + Convert.ToString(card[i]), player); //傳送手牌訊息給client
+                    }
+                    else
+                    {
+                        SendTo("c" + Convert.ToString(card[i]),player);
+                    }
+                }
+            }
+        }
+        //檢查剩餘牌組 若為0 就重制牌組
+        private void Check_deck()
+        {
+            remain_card = 52;
+            zero_count = 0;
+            for (int i = 0; i < card_deck.Length; i++)
+                if (card_deck[i] == 0)
+                {
+                    zero_count++;
+                }
+            remain_card -= zero_count; 
+            if (zero_count >= 52)
+            {
+                Reset_card_deck();
+            }
+        }
+        //出完牌重新抽牌
+        private void Change_card(int n,String User)
+        {
+        retake:
+            card[n] = rnd.Next(1, 53); //亂數抽牌
+            check = card[n];
+            if (card_deck[check - 1] == 0) //檢查是否重複抽牌
+            {
+                goto retake;
+            }
+            else
+                card_deck[check - 1] = 0;
+                if (card[n] < 10)
+                {
+                    SendTo("H" + "0" + Convert.ToString(card[n]),User); //傳送H控制碼+新牌給單一玩家
+                }
+                else
+                {
+                    SendTo("H" + Convert.ToString(card[n]), User); //傳送H控制碼+新牌給單一玩家
+            }
 
         }
-        //出牌後回傳server牌組編號
-        private void PictureBox1_Click(object sender, EventArgs e) //手牌1
+        //判斷牌型 計算點數
+        private void Count_points(int point)
         {
-            card_isclick = 1; //第一張牌被點擊
-            Judge_cardType(card[0]); //判定牌型
-            ChangeCard(0); //要求換新牌
-            ReturnCard(card[0]); //將打出的牌傳給server端 
-            Step();
-            label_show_next.Text = "請等待其他玩家出牌";
-        }
-        private void PictureBox2_Click(object sender, EventArgs e) //手牌2
-        {           
-            card_isclick = 2; //第二張牌被點擊
-            Judge_cardType(card[1]);
-            ChangeCard(1);
-            ReturnCard(card[1]);
-            Step();
-            label_show_next.Text = "請等待其他玩家出牌";
-        }
-        private void PictureBox3_Click(object sender, EventArgs e) //手牌3
-        {
-            card_isclick = 3; //第三張牌被點擊
-            Judge_cardType(card[2]);
-            ChangeCard(2);
-            ReturnCard(card[2]);
-            Step();
-            label_show_next.Text = "請等待其他玩家出牌";
-        }
-        private void PictureBox4_Click(object sender, EventArgs e) //手牌4
-        {
-            card_isclick = 4; //第四張牌被點擊
-            Judge_cardType(card[3]);
-            ChangeCard(3);
-            ReturnCard(card[3]);
-            Step();
-            label_show_next.Text = "請等待其他玩家出牌";
-        }
-
-        private void PictureBox5_Click(object sender, EventArgs e) //手牌5
-        {
-            card_isclick = 5; //第五張牌被點擊
-            Judge_cardType(card[4]);
-            ChangeCard(4);
-            ReturnCard(card[4]);
-            Step();
-            label_show_next.Text = "請等待其他玩家出牌";
-        }
-        
-        //判斷牌型回傳給server
-        private void Judge_cardType(int card_type)
-        {
-            int point = card_type % 13; //判斷手牌類型
-            int game_point=0; 
             switch (point)
             {
                 //打出 K 點數變成99
-                case 0:
+                case 99:
                     game_point = 99;
-                    Send("R" + game_point); //回傳server點數訊息
+                    textBox3.Text = "" + game_point;
                     break;
-                //打出 Ace 點數歸零
+                //打出 黑桃Ace 點數歸零
+                case 0:
+                    game_point = 0;
+                    textBox3.Text = "" + game_point;
+                    break;
+                //打出Ace 點數+1
                 case 1:
-                    if (card_type == 40) //判定是否是黑桃ACE
-                    {
-                        game_point = 0;
-                    }
-                    else
-                        game_point = 1;
-                    Send("R" + game_point);
+                    game_point += 1;
+                    textBox3.Text = "" + game_point;
                     break;
                 //打出 2  點數+2
                 case 2:
-                    game_point = 2;
-                    Send("R" + game_point);
+                    game_point += 2;
+                    textBox3.Text = "" + game_point;
                     break;
                 //打出 3 點數+3
                 case 3:
-                    game_point = 3;
-                    Send("R" + game_point);
+                    game_point += 3;
+                    textBox3.Text = "" + game_point;
                     break;
                 //打出 4 點數+4
                 case 4:
-                    game_point = 4;
-                    Send("R" + game_point);
+                    game_point += 4;
+                    textBox3.Text = "" + game_point;
                     break;
                 //打出 5 點數+5
                 case 5:
-                    game_point = 5;
-                    Send("R" + game_point);
+                    game_point += 5;
+                    textBox3.Text = "" + game_point;
                     break;
                 //打出 6 點數+6
                 case 6:
-                    game_point = 6;
-                    Send("R" + game_point);
+                    game_point += 6;
+                    textBox3.Text = "" + game_point;
                     break;
                 //打出 7 點數+7
                 case 7:
-                    game_point = 7;
-                    Send("R" + game_point);
+                    game_point += 7;
+                    textBox3.Text = "" + game_point;
                     break;
                 //打出 8 點數+8
                 case 8:
-                    game_point = 8;
-                    Send("R" + game_point);
+                    game_point += 8;
+                    textBox3.Text = "" + game_point;
                     break;
                 //打出 9 點數+9
                 case 9:
-                    game_point = 9;
-                    Send("R" + game_point);
+                    game_point += 9;
+                    textBox3.Text = "" + game_point;
                     break;
-                //打出 10 點數+10或-10
-                case 10: //跳出視窗讓玩家可以選擇要+10或減10
-                    DialogResult Select10Type = MessageBox.Show("確定=增加 取消=減少", "請選擇增加或減少", MessageBoxButtons.OKCancel);
-                    if (Select10Type == DialogResult.OK)
+                //打出 10 選擇點數+10
+                case 10:
+                    game_point += 10;
+                    textBox3.Text = "" + game_point;
+                    break;
+                //打出 10 選擇點數-10
+                case -10:
+                    game_point -= 10;
+                    if (game_point < 0)
                     {
-                        game_point = 10;
-                        
+                        game_point = 0;
                     }
-                    else if (Select10Type == DialogResult.Cancel)
-                    {
-                        game_point = -10;
-                        
-                    }
-                    Send("R" + game_point);
+                    textBox3.Text = "" + game_point;
                     break;
                 //打出 J Pass
                 case 11:
-                    game_point = 11;
-                    Send("R" + game_point);
+                    textBox3.Text = "" + game_point;
                     break;
-                //打出 Q 點數+20或-20
-                case 12: //跳出視窗讓玩家可以選擇要+20或減20
-                    DialogResult SelectQType = MessageBox.Show("確定=增加 取消=減少", "請選擇增加或減少", MessageBoxButtons.OKCancel);
-                    if (SelectQType == DialogResult.OK)
-                    {
-                        game_point = 20;
-                    }
-                    else if (SelectQType == DialogResult.Cancel)
-                    {
-                        game_point = -20;
-                    }
-                    Send("R" + game_point);
+                //打出 Q 選擇點數+20
+                case 20:
+                    game_point += 20;
+                    textBox3.Text = "" + game_point;
                     break;
-            } 
-        }
-        private void ChangeCard(int n) //回傳server 第幾張手牌被打出去
-        {
-            Send("H" + n );
-        }
-        private void ReturnCard(int n)
-        {
-            if (n < 10)
-            {
-                Send("D" + "0" + n + User); //回傳server出了哪張牌 用來公告給其他client端
+               
+                //打出 Q 選擇點數-20
+                case -20:
+                    game_point -= 20;
+                    if (game_point < 0)
+                    {
+                        game_point = 0;
+                    }
+                    textBox3.Text = "" + game_point;
+                    break;
             }
-            else
-                Send("D" + n + User); //回傳server出了哪張牌 用來公告給其他client端
+            Reset();
         }
 
-        private void Button_start_Click(object sender, EventArgs e) //開始遊戲
+        //判斷勝負 重製牌局
+        private void Reset()
         {
-            Send("G" + User);
-            button_start.Enabled = false;
-        }
-
-        private void Step()
-        {
-            pictureBox1.Enabled = false;
-            pictureBox2.Enabled = false;
-            pictureBox3.Enabled = false;
-            pictureBox4.Enabled = false;
-            pictureBox5.Enabled = false;   
+            textBox3.Text = "" + game_point;
+            if (game_point > 99)
+            {
+                SendAll("s" + textBox3.Text); //傳送結束訊息給client 
+            }
         }
     }
 }
